@@ -1,0 +1,6 @@
+{
+  "name": "GH Player",
+  "description": "A stylish mobile media player incorporating Ghana's rich heritage with powerful offline video/audio playback, equalizers, PIP mode, and customizable skins.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
