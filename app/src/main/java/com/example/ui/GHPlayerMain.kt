@@ -5,9 +5,12 @@ import android.widget.VideoView
 import android.net.Uri
 import android.util.Log
 import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -38,6 +41,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.R
+import androidx.compose.ui.layout.ContentScale
 import com.example.data.LocalMediaItem
 import com.example.data.database.MediaHistory
 import com.example.data.database.Playlist
@@ -46,9 +51,13 @@ import com.example.ui.theme.GHSkin
 import com.example.ui.theme.SkinsList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.activity.compose.BackHandler
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -59,7 +68,8 @@ fun hasAllPermissions(context: Context): Boolean {
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_AUDIO,
-            Manifest.permission.READ_MEDIA_VIDEO
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.POST_NOTIFICATIONS
         )
     } else {
         listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -147,8 +157,15 @@ fun GHPlayerMain(
     val skin = viewModel.currentSkin
     var showSubtitleDialog by remember { mutableStateOf<LocalMediaItem?>(null) }
     var showTrackDialog by remember { mutableStateOf<LocalMediaItem?>(null) }
+    var isAudioPlayerExpanded by remember { mutableStateOf(false) }
+    var showSplashScreen by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    LaunchedEffect(Unit) {
+        delay(2000)
+        showSplashScreen = false
+    }
 
     var permissionsGranted by remember { mutableStateOf(hasAllPermissions(context)) }
 
@@ -168,7 +185,8 @@ fun GHPlayerMain(
             val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 arrayOf(
                     Manifest.permission.READ_MEDIA_AUDIO,
-                    Manifest.permission.READ_MEDIA_VIDEO
+                    Manifest.permission.READ_MEDIA_VIDEO,
+                    Manifest.permission.POST_NOTIFICATIONS
                 )
             } else {
                 arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -181,7 +199,8 @@ fun GHPlayerMain(
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
                 Manifest.permission.READ_MEDIA_AUDIO,
-                Manifest.permission.READ_MEDIA_VIDEO
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.POST_NOTIFICATIONS
             )
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -194,7 +213,57 @@ fun GHPlayerMain(
     val historyList by viewModel.playbackHistory.collectAsState()
     val favoritesList by viewModel.favorites.collectAsState()
 
-    Scaffold(
+    BackHandler(enabled = isAudioPlayerExpanded) {
+        isAudioPlayerExpanded = false
+    }
+
+    if (viewModel.isInPipMode) {
+        viewModel.activeVideoItem?.let { activeVideo ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                RealVideoPlayerView(
+                    videoItem = activeVideo,
+                    isPlaying = viewModel.isPlaying,
+                    position = viewModel.currentPlaybackPosition,
+                    playbackSpeed = viewModel.playbackSpeed,
+                    skin = skin,
+                    onPositionChanged = { viewModel.manualSeekTo(it) },
+                    lastManualSeekTimeMs = viewModel.lastManualSeekTimeMs,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        } ?: run {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No video playing", color = Color.White)
+            }
+        }
+    } else if (showSplashScreen) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color(0xFF0C0D0C)),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = androidx.compose.ui.res.painterResource(id = R.drawable.img_splash_1781317118399),
+                contentDescription = "Splash Screen Logo",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("app_splash_screen"),
+                contentScale = ContentScale.Crop
+            )
+        }
+    } else {
+        Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = skin.background,
         bottomBar = {
@@ -287,17 +356,9 @@ fun GHPlayerMain(
             showSubtitleDialog?.let { item ->
                 GHPDownloadSubtitleDialog(
                     item = item,
+                    viewModel = viewModel,
                     skin = skin,
-                    onDismiss = { showSubtitleDialog = null },
-                    onConfirmDownload = {
-                        viewModel.downloadSubtitle(item) { msg ->
-                            scope.launch {
-                                showSubtitleDialog = null
-                                // Auto show alert
-                                delay(100)
-                            }
-                        }
-                    }
+                    onDismiss = { showSubtitleDialog = null }
                 )
             }
 
@@ -326,28 +387,54 @@ fun GHPlayerMain(
 
             // Render bottom miniature audio player if audio is active
             viewModel.activeAudioItem?.let { activeAudio ->
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    MiniAudioPlayerCard(
+                if (!isAudioPlayerExpanded) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        val isFav = favoritesList.any { it.path == activeAudio.path }
+                        MiniAudioPlayerCard(
+                            audioItem = activeAudio,
+                            isPlaying = viewModel.isPlaying,
+                            position = viewModel.currentPlaybackPosition,
+                            isFavorite = isFav,
+                            onToggleFavorite = { viewModel.toggleFavorite(activeAudio.path) },
+                            onPlayPause = {
+                                if (viewModel.isPlaying) viewModel.pauseAudio() else viewModel.resumePlayback()
+                            },
+                            onClose = { viewModel.stopPlayback() },
+                            skin = skin,
+                            onSeekForward = { viewModel.seekForward() },
+                            onSeekBackward = { viewModel.seekBackward() },
+                            onSeekTo = { viewModel.seekTo(it) },
+                            onExpand = { isAudioPlayerExpanded = true }
+                        )
+                    }
+                } else {
+                    val isFav = favoritesList.any { it.path == activeAudio.path }
+                    FullscreenAudioPlayer(
                         audioItem = activeAudio,
                         isPlaying = viewModel.isPlaying,
                         position = viewModel.currentPlaybackPosition,
+                        isFavorite = isFav,
+                        onToggleFavorite = { viewModel.toggleFavorite(activeAudio.path) },
                         onPlayPause = {
                             if (viewModel.isPlaying) viewModel.pauseAudio() else viewModel.resumePlayback()
                         },
-                        onClose = { viewModel.stopPlayback() },
+                        onClosePlayer = { isAudioPlayerExpanded = false },
                         skin = skin,
                         onSeekForward = { viewModel.seekForward() },
-                        onSeekBackward = { viewModel.seekBackward() }
+                        onSeekBackward = { viewModel.seekBackward() },
+                        onSeekTo = { viewModel.seekTo(it) },
+                        viewModel = viewModel
                     )
                 }
             }
 
             // Render detailed fullscreen overlay playing view if active Video
             viewModel.activeVideoItem?.let { activeVideo ->
+                val isFav = favoritesList.any { it.path == activeVideo.path }
                 FullscreenVideoPlayer(
                     videoItem = activeVideo,
                     isPlaying = viewModel.isPlaying,
@@ -358,7 +445,12 @@ fun GHPlayerMain(
                     isBackgroundPlay = viewModel.isBackgroundPlayEnabled,
                     activeTrack = viewModel.activeAudioTrack,
                     subtitleUrl = viewModel.activeSubtitleUrl,
+                    subtitleText = viewModel.getDynamicSubtitleText(viewModel.currentPlaybackPosition),
+                    subtitleTextSize = viewModel.subtitleTextSize,
+                    subtitleColor = viewModel.subtitleColor,
                     skin = skin,
+                    isFavorite = isFav,
+                    onToggleFavorite = { viewModel.toggleFavorite(activeVideo.path) },
                     onChangePlayPause = {
                         if (viewModel.isPlaying) viewModel.pauseVideoPlayback() else viewModel.resumePlayback()
                     },
@@ -370,11 +462,14 @@ fun GHPlayerMain(
                     onChangeBackgroundPlay = { viewModel.isBackgroundPlayEnabled = it },
                     onShowTracks = { showTrackDialog = activeVideo },
                     onShowSubtitles = { showSubtitleDialog = activeVideo },
-                    onClosePlayer = { viewModel.stopPlayback() }
+                    onClosePlayer = { viewModel.stopPlayback() },
+                    onSeekTo = { viewModel.manualSeekTo(it) },
+                    lastManualSeekTimeMs = viewModel.lastManualSeekTimeMs
                 )
             }
         }
     }
+}
 }
 
 // ------------------------------------------------------------------
@@ -472,6 +567,7 @@ fun VideosScreen(
     onRequestPermission: () -> Unit
 ) {
     val skin = viewModel.currentSkin
+    val favoritesList by viewModel.favorites.collectAsState()
 
     // Create folder options from videos list
     val folders = remember(videos) {
@@ -487,6 +583,8 @@ fun VideosScreen(
         }
     }
 
+    var currentView by remember { mutableStateOf("All") } // "All", "List", "Folder", "Video", "Network"
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -500,6 +598,29 @@ fun VideosScreen(
         )
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        // Navigation Bar (All, List, Folder, Video, Network)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val navItems = listOf("All", "List", "Folder", "Video", "Network")
+            navItems.forEach { item ->
+                val isSelected = currentView == item
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { currentView = item },
+                    label = { Text(item.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = skin.primary,
+                        containerColor = skin.surface
+                    )
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        // Conditional content rendering based on currentView... (rest of code)
 
         if (!permissionsGranted) {
             PermissionPromptCard(
@@ -609,9 +730,11 @@ fun VideosScreen(
                 modifier = Modifier.weight(1f)
             ) {
                 items(filteredVideos) { video ->
+                    val isFav = favoritesList.any { it.path == video.path }
                     VideoItemCard(
                         video = video,
                         skin = skin,
+                        isFavorite = isFav,
                         onPlayClick = { viewModel.playVideo(video) },
                         onConvertToMp3Click = { viewModel.convertVideoToMp3(video) },
                         onShowSubtitles = { onShowSubtitles(video) },
@@ -694,6 +817,7 @@ fun HeaderGhanaBranding(
 fun VideoItemCard(
     video: LocalMediaItem,
     skin: GHSkin,
+    isFavorite: Boolean,
     onPlayClick: () -> Unit,
     onConvertToMp3Click: () -> Unit,
     onShowSubtitles: () -> Unit,
@@ -858,9 +982,9 @@ fun VideoItemCard(
                     // Favorite button
                     IconButton(onClick = onToggleFavorite) {
                         Icon(
-                            Icons.Filled.Favorite,
+                            imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                             contentDescription = "Favorite",
-                            tint = skin.accentRed,
+                            tint = if (isFavorite) skin.accentRed else skin.onSurface.copy(alpha = 0.6f),
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -883,12 +1007,14 @@ fun MusicScreen(
     val skin = viewModel.currentSkin
     val playlists by viewModel.playlists.collectAsState()
     val activePlaylistSongs by viewModel.activePlaylistSongs.collectAsState()
+    val favoritesList by viewModel.favorites.collectAsState()
 
     var activeMusicSubTab by remember { mutableStateOf("all_tracks") } // "all_tracks" or "playlists"
     var selectedPlaylistView by remember { mutableStateOf<Playlist?>(null) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var songToAddToPlaylist by remember { mutableStateOf<LocalMediaItem?>(null) }
+    var currentView by remember { mutableStateOf("All") } // "All", "List", "Folder", "Video", "Network"
 
     // Dialog for Creating Playlist
     if (showCreatePlaylistDialog) {
@@ -946,8 +1072,65 @@ fun MusicScreen(
         )
     }
 
-    // Dialog for Adding song to selected Playlist
-    if (songToAddToPlaylist != null) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // App Header
+        HeaderGhanaBranding(
+            title = "GH MUSIC PLAYER",
+            skin = skin,
+            onRefreshClick = { viewModel.refreshLibrary() }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Navigation Bar (All, List, Folder, Video, Network)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val navItems = listOf("All", "List", "Folder", "Video", "Network")
+            navItems.forEach { item ->
+                val isSelected = currentView == item
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { currentView = item },
+                    label = { Text(item.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = skin.primary,
+                        containerColor = skin.surface
+                    )
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        if (!permissionsGranted) {
+            PermissionPromptCard(
+                skin = skin,
+                message = "The app needs storage permissions to scan and show your local songs and audio clips from your device storage.",
+                onGrant = onRequestPermission
+            )
+        } else {
+            when (currentView) {
+                "All" -> {
+                    // Logic for "All" view
+                }
+                "Folder" -> {
+                    Text("Folder browsing coming soon!", color = skin.onSurface)
+                }
+                else -> {
+                    Text("View $currentView not yet implemented.", color = skin.onSurface)
+                }
+            }
+        }
+    }
+
+}
+
+
         AlertDialog(
             onDismissRequest = { songToAddToPlaylist = null },
             containerColor = skin.surface,
@@ -1285,10 +1468,12 @@ fun MusicScreen(
                 ) {
                     items(filteredAudios) { audio ->
                         val isActive = viewModel.activeAudioItem?.id == audio.id
+                        val isFav = favoritesList.any { it.path == audio.path }
                         AudioFileRow(
                             audio = audio,
                             isActive = isActive,
                             skin = skin,
+                            isFavorite = isFav,
                             onClick = { viewModel.playAudio(audio) },
                             onToggleFavorite = { viewModel.toggleFavorite(audio.path) },
                             onAddToPlaylist = { songToAddToPlaylist = audio }
@@ -1586,6 +1771,7 @@ fun AudioFileRow(
     audio: LocalMediaItem,
     isActive: Boolean,
     skin: GHSkin,
+    isFavorite: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit
@@ -1668,9 +1854,9 @@ fun AudioFileRow(
             }
             IconButton(onClick = onToggleFavorite) {
                 Icon(
-                    Icons.Filled.Favorite,
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = "Favorite",
-                    tint = skin.accentRed.copy(alpha = 0.8f),
+                    tint = if (isFavorite) skin.accentRed else skin.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1908,6 +2094,49 @@ fun SkinsScreen(viewModel: MainViewModel) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.weight(1f)
         ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("demo_media_toggle_card"),
+                    colors = CardDefaults.cardColors(containerColor = skin.surface),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.toggleDemoMedia(!viewModel.showDemoMedia) }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "DEMO / STREAMING MEDIA",
+                                fontWeight = FontWeight.Bold,
+                                color = skin.onSurface,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "Enable to load preloaded Ghana-themed streaming videos and audios for testing without local device files.",
+                                fontSize = 11.sp,
+                                color = skin.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Switch(
+                            checked = viewModel.showDemoMedia,
+                            onCheckedChange = { viewModel.toggleDemoMedia(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = skin.primary,
+                                checkedTrackColor = skin.primary.copy(alpha = 0.3f),
+                                uncheckedThumbColor = skin.onSurface.copy(alpha = 0.4f),
+                                uncheckedTrackColor = skin.onSurface.copy(alpha = 0.1f)
+                            )
+                        )
+                    }
+                }
+            }
+
             items(SkinsList) { targetSkin ->
                 val isSelected = targetSkin.name == skin.name
 
@@ -2012,6 +2241,8 @@ fun HistoryScreen(
 ) {
     val skin = viewModel.currentSkin
     var selectedFilterTab by remember { mutableStateOf("History") } // "History" or "Favorites"
+    var searchHistoryQuery by remember { mutableStateOf("") }
+    var selectedMediaTypeFilter by remember { mutableStateOf("All") } // "All", "Videos", "Audios"
 
     Column(
         modifier = Modifier
@@ -2051,7 +2282,57 @@ fun HistoryScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Search bar
+        OutlinedTextField(
+            value = searchHistoryQuery,
+            onValueChange = { searchHistoryQuery = it },
+            placeholder = { Text("Search title, keywords...", color = skin.onSurface.copy(alpha = 0.5f), fontSize = 13.sp) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = skin.primary) },
+            trailingIcon = {
+                if (searchHistoryQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchHistoryQuery = "" }) {
+                        Icon(Icons.Filled.Clear, contentDescription = "Clear", tint = skin.primary)
+                    }
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedBorderColor = skin.surface,
+                focusedBorderColor = skin.primary,
+                unfocusedContainerColor = skin.surface.copy(alpha = 0.3f),
+                focusedContainerColor = skin.surface
+            ),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Horizontal Category Filter Chips Row
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("All", "Videos", "Audios").forEach { type ->
+                val isSelected = selectedMediaTypeFilter == type
+                AssistChip(
+                    onClick = { selectedMediaTypeFilter = type },
+                    label = { Text(type.uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (isSelected) skin.primary else skin.surface.copy(alpha = 0.5f),
+                        labelColor = if (isSelected) skin.background else skin.onSurface
+                    ),
+                    border = null,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(26.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2076,12 +2357,31 @@ fun HistoryScreen(
                         Text("CLEAR HISTORY", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
+            } else if (selectedFilterTab == "Favorites" && favoritesList.isNotEmpty()) {
+                TextButton(
+                    onClick = { viewModel.clearFavorites() },
+                    colors = ButtonDefaults.textButtonColors(contentColor = skin.accentRed)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("CLEAR FAVORITES", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        val displayedList = if (selectedFilterTab == "History") historyList else favoritesList
+        val baseList = if (selectedFilterTab == "History") historyList else favoritesList
+        val displayedList = baseList.filter { record ->
+            val matchQuery = searchHistoryQuery.isEmpty() || record.title.contains(searchHistoryQuery, ignoreCase = true)
+            val matchType = when (selectedMediaTypeFilter) {
+                "Videos" -> record.mediaType == "video"
+                "Audios" -> record.mediaType == "audio"
+                else -> true
+            }
+            matchQuery && matchType
+        }
 
         if (displayedList.isEmpty()) {
             Box(
@@ -2099,7 +2399,7 @@ fun HistoryScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Your ${selectedFilterTab.lowercase()} is currently empty",
+                        text = "No matching items found",
                         color = skin.onSurface.copy(alpha = 0.6f),
                         fontSize = 13.sp
                     )
@@ -2132,7 +2432,8 @@ fun HistoryScreen(
                                 viewModel.playAudio(mediaItem)
                             }
                         },
-                        onDeleteClick = { viewModel.removeFromHistory(record.id) }
+                        onDeleteClick = { viewModel.removeFromHistory(record.id) },
+                        onToggleFavorite = { viewModel.toggleFavorite(record.path) }
                     )
                 }
             }
@@ -2152,7 +2453,8 @@ fun HistoryItemCard(
     record: MediaHistory,
     skin: GHSkin,
     onPlayClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    onToggleFavorite: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -2201,6 +2503,15 @@ fun HistoryItemCard(
                 }
             }
 
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (record.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                    contentDescription = "Toggle Favorite",
+                    tint = if (record.isFavorite) skin.accentRed else skin.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
             IconButton(onClick = onPlayClick) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = skin.primary)
             }
@@ -2220,39 +2531,60 @@ fun MiniAudioPlayerCard(
     audioItem: LocalMediaItem,
     isPlaying: Boolean,
     position: Long,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     onPlayPause: () -> Unit,
     onClose: () -> Unit,
     skin: GHSkin,
     onSeekForward: () -> Unit,
-    onSeekBackward: () -> Unit
+    onSeekBackward: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onExpand: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("mini_audio_player"),
-        colors = CardDefaults.cardColors(containerColor = skin.surface),
+            .testTag("mini_audio_player")
+            .clickable { onExpand() }
+            .border(
+                width = 1.5.dp,
+                brush = Brush.horizontalGradient(
+                    colors = listOf(skin.primary, skin.primary.copy(alpha = 0.4f))
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ),
+        colors = CardDefaults.cardColors(containerColor = skin.surface.copy(alpha = 0.95f)),
         shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Disk Animation
+                // Disk Animation / Music Note Icon
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .background(skin.accentGold),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Filled.MusicNote, contentDescription = null, tint = skin.background)
+                    Icon(
+                        imageVector = Icons.Filled.MusicNote,
+                        contentDescription = "Music Note",
+                        tint = skin.background,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                Column(modifier = Modifier.weight(1f)) {
+                // Title and Artist Column - explicitly limited to single lines to prevent any wrapping columns!
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text(
                         text = audioItem.title,
                         fontWeight = FontWeight.Bold,
@@ -2261,34 +2593,501 @@ fun MiniAudioPlayerCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = audioItem.artist,
+                        text = audioItem.artist.ifEmpty { "Unknown Artist" },
                         fontSize = 11.sp,
-                        color = skin.onSurface.copy(alpha = 0.6f)
+                        color = skin.onSurface.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                // Controls Row
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onSeekBackward) {
-                        Icon(Icons.Filled.FastRewind, contentDescription = "-10s", tint = skin.primary, modifier = Modifier.size(20.dp))
-                    }
-                    IconButton(onClick = onPlayPause) {
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Controls Row - optimized horizontal footprint to prevent text column squishing
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Skip Backward button
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable { onSeekBackward() },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
-                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = "Play Pause",
+                            imageVector = Icons.Filled.FastRewind,
+                            contentDescription = "-10s",
                             tint = skin.primary,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-                    IconButton(onClick = onSeekForward) {
-                        Icon(Icons.Filled.FastForward, contentDescription = "+10s", tint = skin.primary, modifier = Modifier.size(20.dp))
+
+                    // Play Pause Button
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(skin.primary.copy(alpha = 0.15f))
+                            .clickable { onPlayPause() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = skin.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = skin.accentRed)
+
+                    // Skip Forward button
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable { onSeekForward() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.FastForward,
+                            contentDescription = "+10s",
+                            tint = skin.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // Favorited Heart
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable { onToggleFavorite() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                            contentDescription = "Toggle Favorite",
+                            tint = if (isFavorite) skin.accentRed else skin.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    // Close Button
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable { onClose() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close",
+                            tint = skin.accentRed,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Dynamic Audio Slider and Timestamps (Elapsed to Left / Duration to Right)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = formatDuration(position),
+                    color = skin.onSurface.copy(alpha = 0.6f),
+                    fontSize = 10.sp
+                )
+                Slider(
+                    value = if (audioItem.duration > 0) (position.toFloat() / audioItem.duration).coerceIn(0f, 1f) else 0f,
+                    onValueChange = { fraction ->
+                        val targetPos = (fraction * audioItem.duration).toLong()
+                        onSeekTo(targetPos)
+                    },
+                    modifier = Modifier.weight(1f).height(12.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = skin.accentGold,
+                        activeTrackColor = skin.primary,
+                        inactiveTrackColor = skin.onSurface.copy(alpha = 0.15f)
+                    )
+                )
+                Text(
+                    text = formatDuration(audioItem.duration),
+                    color = skin.onSurface.copy(alpha = 0.6f),
+                    fontSize = 10.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun FullscreenAudioPlayer(
+    audioItem: LocalMediaItem,
+    isPlaying: Boolean,
+    position: Long,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onPlayPause: () -> Unit,
+    onClosePlayer: () -> Unit,
+    skin: GHSkin,
+    onSeekForward: () -> Unit,
+    onSeekBackward: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    viewModel: MainViewModel
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showMoreMenu by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(skin.surface, skin.background)
+                )
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(24.dp)
+            .testTag("fullscreen_audio_player")
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // 1. Top Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onClosePlayer) {
+                    Icon(
+                        imageVector = Icons.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = skin.onBackground,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Share Button
+                    IconButton(onClick = {
+                        try {
+                            val sendIntent = android.content.Intent().apply {
+                                action = android.content.Intent.ACTION_SEND
+                                putExtra(android.content.Intent.EXTRA_TEXT, "Now playing: ${audioItem.title} by ${audioItem.artist} on GHPlayer!")
+                                type = "text/plain"
+                            }
+                            val shareIntent = android.content.Intent.createChooser(sendIntent, "Share Track")
+                            context.startActivity(shareIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("GHPlayer", "Failed to share track", e)
+                        }
+                    }) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Share",
+                            tint = skin.onBackground,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // Favorite/Star Button
+                    IconButton(onClick = onToggleFavorite) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = "Favorite",
+                            tint = if (isFavorite) skin.accentGold else skin.onBackground,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    // More actions Button
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "More",
+                            tint = skin.onBackground,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
+
+            // 2. Large Album Art Cover Art card (Centered with rounded corners)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.05f)
+                        .clip(RoundedCornerShape(32.dp)),
+                    colors = CardDefaults.cardColors(containerColor = skin.surface.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(32.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        skin.primary.copy(alpha = 0.25f),
+                                        Color.Black.copy(alpha = 0.5f)
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            // Centered Large Music Icon
+                            Box(
+                                modifier = Modifier
+                                    .size(110.dp)
+                                    .background(skin.onBackground.copy(alpha = 0.08f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.MusicNote,
+                                    contentDescription = null,
+                                    tint = skin.primary,
+                                    modifier = Modifier.size(54.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(24.dp))
+
+                            // Nice audio visualizer animation block inside the cover when playing
+                            Row(
+                                modifier = Modifier.height(36.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                val barCount = 10
+                                for (i in 0 until barCount) {
+                                    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
+                                    val duration = remember(i) { (600..1200).random() }
+                                    val heightProportion by if (isPlaying) {
+                                        infiniteTransition.animateFloat(
+                                            initialValue = 0.2f,
+                                            targetValue = 1.0f,
+                                            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                                                animation = androidx.compose.animation.core.tween(duration, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                                                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                                            )
+                                        )
+                                    } else {
+                                        remember { mutableStateOf(0.15f) }
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .width(5.dp)
+                                            .fillMaxHeight(heightProportion)
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    colors = listOf(skin.primary, skin.accentGold)
+                                                ),
+                                                RoundedCornerShape(2.dp)
+                                            )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Metadata Header (Left Aligned under the Cover art, matching screenshot)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text(
+                    text = audioItem.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    color = skin.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = audioItem.artist.ifEmpty { "Unknown Artist" },
+                    fontSize = 16.sp,
+                    color = skin.onSurface.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // 4. Progress Seeker and Timestamps (Elapsed left, total right)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Slider(
+                    value = if (audioItem.duration > 0) (position.toFloat() / audioItem.duration).coerceIn(0f, 1f) else 0f,
+                    onValueChange = { fraction ->
+                        val targetPos = (fraction * audioItem.duration).toLong()
+                        onSeekTo(targetPos)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(20.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = skin.primary,
+                        activeTrackColor = skin.primary,
+                        inactiveTrackColor = skin.onSurface.copy(alpha = 0.2f)
+                    )
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = formatDuration(position),
+                        color = skin.onSurface.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = formatDuration(audioItem.duration),
+                        color = skin.onSurface.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // 5. Control Button Action Row (Shuffle, Play/Pause, Prev, Next, Repeat)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Shuffle Button (Leftmost)
+                IconButton(onClick = { viewModel.toggleShuffle() }) {
+                    Icon(
+                        imageVector = Icons.Filled.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (viewModel.isShuffleEnabled) skin.primary else skin.onSurface.copy(alpha = 0.4f),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // Skip Previous Button (Left-center)
+                IconButton(onClick = { viewModel.playPreviousAudio() }) {
+                    Icon(
+                        imageVector = Icons.Filled.SkipPrevious,
+                        contentDescription = "Previous",
+                        tint = skin.onBackground,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                // Centered large, theme-colored Play/Pause Button
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(skin.primary)
+                        .clickable { onPlayPause() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = "Play/Pause",
+                        tint = skin.background,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+
+                // Skip Next Button (Right-center)
+                IconButton(onClick = { viewModel.playNextAudio() }) {
+                    Icon(
+                        imageVector = Icons.Filled.SkipNext,
+                        contentDescription = "Next",
+                        tint = skin.onBackground,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                // Repeat Button (Rightmost)
+                Box(contentAlignment = Alignment.Center) {
+                    IconButton(onClick = { viewModel.toggleRepeatMode() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Repeat,
+                            contentDescription = "Repeat",
+                            tint = if (viewModel.repeatMode != RepeatMode.OFF) skin.primary else skin.onSurface.copy(alpha = 0.4f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    if (viewModel.repeatMode == RepeatMode.ONE) {
+                        Text(
+                            text = "1",
+                            color = skin.background,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(x = 6.dp, y = (-6).dp)
+                                .background(skin.primary, CircleShape)
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // More Menu Info Dialog
+        if (showMoreMenu) {
+            AlertDialog(
+                onDismissRequest = { showMoreMenu = false },
+                title = { Text("Track Specifications", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Title: ${audioItem.title}", fontWeight = FontWeight.SemiBold)
+                        Text("Artist: ${audioItem.artist.ifEmpty { "Unknown" }}")
+                        Text("Duration: ${formatDuration(audioItem.duration)}")
+                        Text("Source: ${audioItem.folder}")
+                        Text("Storage Path:\n${audioItem.path}", fontSize = 11.sp, color = Color.Gray)
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { showMoreMenu = false }) {
+                        Text("Dismiss")
+                    }
+                }
+            )
         }
     }
 }
@@ -2304,6 +3103,7 @@ fun RealVideoPlayerView(
     playbackSpeed: Float,
     skin: GHSkin,
     onPositionChanged: (Long) -> Unit,
+    lastManualSeekTimeMs: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -2315,9 +3115,33 @@ fun RealVideoPlayerView(
         }
     }
 
+    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+    val currentLastSeekTimeMs by androidx.compose.runtime.rememberUpdatedState(lastManualSeekTimeMs)
+
+    LaunchedEffect(isPlaying, videoItem, videoViewRef) {
+        if (isPlaying) {
+            while (true) {
+                try {
+                    videoViewRef?.let { view ->
+                        if (view.isPlaying) {
+                            val timeSinceSeek = System.currentTimeMillis() - currentLastSeekTimeMs
+                            if (timeSinceSeek > 1500L) {
+                                onPositionChanged(view.currentPosition.toLong())
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("RealVideoPlayerView", "Error in position polling look", e)
+                }
+                delay(500)
+            }
+        }
+    }
+
     AndroidView(
         factory = { ctx ->
             VideoView(ctx).apply {
+                videoViewRef = this
                 setVideoURI(videoUri)
                 setOnPreparedListener { mp ->
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2332,9 +3156,13 @@ fun RealVideoPlayerView(
                         start()
                     }
                 }
+                setOnCompletionListener {
+                    onPositionChanged(0L)
+                }
             }
         },
         update = { videoView ->
+            videoViewRef = videoView
             if (isPlaying) {
                 if (!videoView.isPlaying) {
                     videoView.start()
@@ -2356,7 +3184,7 @@ fun RealVideoPlayerView(
             }
 
             val currentViewPos = videoView.currentPosition.toLong()
-            if (Math.abs(position - currentViewPos) > 2000L) {
+            if (Math.abs(position - currentViewPos) > 2500L) {
                 videoView.seekTo(position.toInt())
             }
         },
@@ -2378,7 +3206,12 @@ fun FullscreenVideoPlayer(
     isBackgroundPlay: Boolean,
     activeTrack: String,
     subtitleUrl: String?,
+    subtitleText: String?,
+    subtitleTextSize: Float,
+    subtitleColor: String,
     skin: GHSkin,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     onChangePlayPause: () -> Unit,
     onSeekForward: () -> Unit,
     onSeekBackward: () -> Unit,
@@ -2388,25 +3221,69 @@ fun FullscreenVideoPlayer(
     onChangeBackgroundPlay: (Boolean) -> Unit,
     onShowTracks: () -> Unit,
     onShowSubtitles: () -> Unit,
-    onClosePlayer: () -> Unit
+    onClosePlayer: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    lastManualSeekTimeMs: Long = 0L
 ) {
+    val context = LocalContext.current
+    var controlsVisible by remember { mutableStateOf(true) }
+    var showLeftDoubleTapIndicator by remember { mutableStateOf(false) }
+    var showRightDoubleTapIndicator by remember { mutableStateOf(false) }
+
+    LaunchedEffect(controlsVisible, isPlaying) {
+        if (controlsVisible && isPlaying) {
+            delay(4000)
+            controlsVisible = false
+        }
+    }
+
+    LaunchedEffect(showLeftDoubleTapIndicator) {
+        if (showLeftDoubleTapIndicator) {
+            delay(600)
+            showLeftDoubleTapIndicator = false
+        }
+    }
+    LaunchedEffect(showRightDoubleTapIndicator) {
+        if (showRightDoubleTapIndicator) {
+            delay(600)
+            showRightDoubleTapIndicator = false
+        }
+    }
+
     if (isFloating) {
         // Floating Mini Picture-in-Picture simulator View
+        var offsetX by remember { mutableStateOf(-20f) }
+        var offsetY by remember { mutableStateOf(100f) }
+        var isMiniSize by remember { mutableStateOf(true) }
+        var isPiPMuted by remember { mutableStateOf(false) }
+
+        val pipWidth = if (isMiniSize) 210.dp else 290.dp
+        val pipHeight = if (isMiniSize) 130.dp else 180.dp
+
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {},
-            contentAlignment = Alignment.TopEnd
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .width(pipWidth + 32.dp)
+                .height(pipHeight + 32.dp)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
         ) {
             Card(
                 modifier = Modifier
-                    .padding(16.dp)
-                    .width(220.dp)
-                    .height(140.dp)
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            // Clamp values to keep the PiP window floating realistically inside visible viewport bounds
+                            offsetX = (offsetX + dragAmount.x).coerceIn(-1000f, 100f)
+                            offsetY = (offsetY + dragAmount.y).coerceIn(-100f, 2000f)
+                        }
+                    }
+                    .border(1.5.dp, skin.primary.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
                     .testTag("floating_video_player"),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = skin.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 18.dp)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Video View Frame
@@ -2416,40 +3293,194 @@ fun FullscreenVideoPlayer(
                         position = position,
                         playbackSpeed = speed,
                         skin = skin,
-                        onPositionChanged = {}
+                        onPositionChanged = onSeekTo,
+                        lastManualSeekTimeMs = lastManualSeekTimeMs
                     )
 
-                    // Control buttons
+                    // Scrim overlay for easier button visibility
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.25f))
+                    )
+
+                    // Top Action Overlay Bar (Drag helper tag, size ratio option, Close action)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.OpenWith,
+                                contentDescription = "Drag Handle",
+                                tint = skin.primary,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "PIP (${if (isMiniSize) "S" else "L"})",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Size toggle button
+                            IconButton(
+                                onClick = { isMiniSize = !isMiniSize },
+                                modifier = Modifier.size(18.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isMiniSize) Icons.Filled.AspectRatio else Icons.Filled.FitScreen,
+                                    contentDescription = "Resize PiP",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
+
+                            // Mute toggle simulation button
+                            IconButton(
+                                onClick = { isPiPMuted = !isPiPMuted },
+                                modifier = Modifier.size(18.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isPiPMuted) Icons.Filled.VolumeMute else Icons.Filled.VolumeUp,
+                                    contentDescription = "Mute Toggle",
+                                    tint = if (isPiPMuted) skin.accentRed else skin.primary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
+
+                            // Close button
+                            IconButton(
+                                onClick = { onClosePlayer() },
+                                modifier = Modifier.size(18.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Close",
+                                    tint = skin.accentRed,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Bottom Control Deck (Backward, Play/Pause, Forward, Fullscreen Restore)
                     Row(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .padding(4.dp),
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
+                                )
+                            )
+                            .padding(bottom = 6.dp, top = 4.dp, start = 4.dp, end = 4.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { onChangePlayPause() }, modifier = Modifier.size(24.dp)) {
-                            Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = null, tint = skin.primary, modifier = Modifier.size(16.dp))
+                        // Skip Backward
+                        IconButton(
+                            onClick = { onSeekBackward() },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastRewind,
+                                contentDescription = "-10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
-                        IconButton(onClick = { onChangeFloating(false) }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Filled.Fullscreen, contentDescription = "Restore", tint = skin.primary, modifier = Modifier.size(16.dp))
+
+                        // Play / Pause toggle
+                        IconButton(
+                            onClick = { onChangePlayPause() },
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(skin.primary, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = "Play/pause",
+                                tint = skin.background,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
-                        IconButton(onClick = { onClosePlayer() }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Filled.Close, contentDescription = "Close", tint = skin.accentRed, modifier = Modifier.size(16.dp))
+
+                        // Skip Forward
+                        IconButton(
+                            onClick = { onSeekForward() },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastForward,
+                                contentDescription = "+10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+
+                        // Restore to Full Screen
+                        IconButton(
+                            onClick = { onChangeFloating(false) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Fullscreen,
+                                contentDescription = "Restore Fullscreen",
+                                tint = skin.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
 
-                    // Watermark
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(4.dp)
-                            .background(skin.accentRed, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Text("PIP MODE", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = skin.onBackground)
+                    // Small overlay subtitle inside PIP
+                    subtitleText?.let { text ->
+                        val displayColor = when (subtitleColor) {
+                            "White" -> Color.White
+                            "Green" -> Color(0xFF2ECC71)
+                            else -> Color(0xFFF1C40F) // Yellow
+                        }
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 34.dp)
+                                .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = text.replace("💬 ", ""),
+                                fontSize = if (isMiniSize) 7.sp else 9.sp,
+                                color = displayColor,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
+
+                    // Sleek horizontal video tracking progress bar indicator at the very bottom
+                    val progressRatio = if (videoItem.duration > 0) (position.toFloat() / videoItem.duration).coerceIn(0f, 1f) else 0f
+                    LinearProgressIndicator(
+                        progress = { progressRatio },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(2.dp),
+                        color = skin.primary,
+                        trackColor = Color.White.copy(alpha = 0.2f)
+                    )
                 }
             }
         }
@@ -2469,11 +3500,12 @@ fun FullscreenVideoPlayer(
                     position = position,
                     playbackSpeed = speed,
                     skin = skin,
-                    onPositionChanged = {}
+                    onPositionChanged = onSeekTo,
+                    lastManualSeekTimeMs = lastManualSeekTimeMs
                 )
             }
 
-            // Custom Gestures Overlay layer for Double-Tap seek (+10s and -10s)
+            // Custom Gestures Overlay layer for Double-Tap seek (+10s and -10s) and Single-Tap toggle
             Row(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -2481,8 +3513,13 @@ fun FullscreenVideoPlayer(
                         .fillMaxHeight()
                         .pointerInput(Unit) {
                             detectTapGestures(
+                                onTap = {
+                                    controlsVisible = !controlsVisible
+                                },
                                 onDoubleTap = {
                                     onSeekBackward()
+                                    showLeftDoubleTapIndicator = true
+                                    showRightDoubleTapIndicator = false
                                 }
                             )
                         }
@@ -2493,180 +3530,323 @@ fun FullscreenVideoPlayer(
                         .fillMaxHeight()
                         .pointerInput(Unit) {
                             detectTapGestures(
+                                onTap = {
+                                    controlsVisible = !controlsVisible
+                                },
                                 onDoubleTap = {
                                     onSeekForward()
+                                    showRightDoubleTapIndicator = true
+                                    showLeftDoubleTapIndicator = false
                                 }
                             )
                         }
                 )
             }
 
-            // UI Header Layer Binds
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
-                        )
-                    )
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onClosePlayer) {
-                    Icon(Icons.Outlined.ArrowBack, contentDescription = "Back", tint = Color.White)
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.Start
+            // Left Double-Tap visual feedback indicator
+            if (showLeftDoubleTapIndicator) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.40f)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.20f), Color.Transparent)
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(videoItem.title, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("Auto-Pause Mode: ${if (autoPause) "ON" else "OFF"} • Track: $activeTrack", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
-                }
-
-                Row {
-                    // Floating button
-                    IconButton(onClick = { onChangeFloating(true) }) {
-                        Icon(Icons.Filled.PictureInPicture, contentDescription = "PIP Mode", tint = skin.primary)
-                    }
-
-                    // Background audio play toggle
-                    IconButton(onClick = { onChangeBackgroundPlay(!isBackgroundPlay) }) {
-                        Icon(
-                            imageVector = if (isBackgroundPlay) Icons.Filled.Headset else Icons.Filled.HeadsetOff,
-                            contentDescription = "Background play",
-                            tint = if (isBackgroundPlay) skin.primary else Color.White
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastRewind,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "-10s",
+                            color = Color.White,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp
                         )
                     }
                 }
             }
 
+            // Right Double-Tap visual feedback indicator
+            if (showRightDoubleTapIndicator) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.40f)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.20f))
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastForward,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "+10s",
+                            color = Color.White,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+            }
+
+            if (controlsVisible) {
+                // UI Header Layer Binds
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                            )
+                        )
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onClosePlayer) {
+                        Icon(Icons.Outlined.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(videoItem.title, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Auto-Pause Mode: ${if (autoPause) "ON" else "OFF"} • Track: $activeTrack", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                    }
+
+                    Row {
+                        // Favorite toggle button
+                        IconButton(onClick = onToggleFavorite) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = "Toggle Favorite",
+                                tint = if (isFavorite) skin.accentRed else Color.White
+                            )
+                        }
+
+                        // Floating button
+                        IconButton(onClick = {
+                            val activity = context.findActivity()
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
+                                try {
+                                    val params = PictureInPictureParams.Builder().build()
+                                    activity.enterPictureInPictureMode(params)
+                                } catch (e: java.lang.Exception) {
+                                    android.util.Log.e("FullscreenVideoPlayer", "Could not enter Picture-in-Picture mode", e)
+                                    onChangeFloating(true) // Fallback to simulated Pip if exception
+                                }
+                            } else {
+                                onChangeFloating(true) // Fallback to simulated Pip on older APIs or if activity is null
+                            }
+                        }) {
+                            Icon(Icons.Filled.PictureInPicture, contentDescription = "PIP Mode", tint = skin.primary)
+                        }
+
+                        // Background audio play toggle
+                        IconButton(onClick = { onChangeBackgroundPlay(!isBackgroundPlay) }) {
+                            Icon(
+                                imageVector = if (isBackgroundPlay) Icons.Filled.Headset else Icons.Filled.HeadsetOff,
+                                contentDescription = "Background play",
+                                tint = if (isBackgroundPlay) skin.primary else Color.White
+                            )
+                        }
+                    }
+                }
+            }
             // Subtitle Display Render Area (If active/downloaded)
-            subtitleUrl?.let { sub ->
+            subtitleText?.let { text ->
+                val displayColor = when (subtitleColor) {
+                    "White" -> Color.White
+                    "Green" -> Color(0xFF2ECC71)
+                    else -> Color(0xFFF1C40F) // "Yellow" gold custom branding
+                }
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 120.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(bottom = if (controlsVisible) 220.dp else 40.dp)
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = if (sub == "Downloading...") "📥 Downloading subtitle language mapping..." 
-                               else "💬 Subtitle loaded: Ghanaian English Track Active",
-                        fontSize = 12.sp,
-                        color = skin.primary,
-                        fontWeight = FontWeight.Bold
+                        text = text,
+                        fontSize = subtitleTextSize.sp,
+                        color = displayColor,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
 
-            // Footer player Controls Panel
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))
+            if (controlsVisible) {
+                // Footer player Controls Panel
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
+                            )
                         )
-                    )
-                    .padding(16.dp)
-            ) {
-                // Seeker Timeline bar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .navigationBarsPadding()
+                        .padding(16.dp)
                 ) {
-                    Text("0:00", color = Color.White, fontSize = 11.sp)
-                    Slider(
-                        value = 0.35f,
-                        onValueChange = {},
-                        modifier = Modifier.weight(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = skin.accentGold,
-                            activeTrackColor = skin.accentGreen,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                        )
-                    )
-                    Text(formatDuration(videoItem.duration), color = Color.White, fontSize = 11.sp)
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Control actions
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceSpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Audio Tracks select quick icon
-                    IconButton(onClick = onShowTracks) {
-                        Icon(Icons.Filled.AudioFile, contentDescription = "Audio track", tint = Color.White)
-                    }
-
-                    // Speeds dial layout (0.5x to 2x)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        listOf(0.5f, 1.0f, 1.5f, 2.0f).forEach { itemSpeed ->
-                            val isSelected = speed == itemSpeed
-                            Box(
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSelected) skin.primary else Color.White.copy(alpha = 0.1f))
-                                    .clickable { onChangeSpeed(itemSpeed) }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    "${itemSpeed}x",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) skin.background else Color.White
-                                )
-                            }
-                        }
-                    }
-
-                    // Main execution buttons
+                    // Seeker Timeline bar
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(formatDuration(position), color = Color.White, fontSize = 11.sp)
+                        Slider(
+                            value = if (videoItem.duration > 0) (position.toFloat() / videoItem.duration).coerceIn(0f, 1f) else 0f,
+                            onValueChange = { fraction ->
+                                val targetPos = (fraction * videoItem.duration).toLong()
+                                onSeekTo(targetPos)
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = SliderDefaults.colors(
+                                thumbColor = skin.accentGold,
+                                activeTrackColor = skin.accentGreen,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                            )
+                        )
+                        Text(formatDuration(videoItem.duration), color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Control actions split for best ergonomics & responsiveness on any device screen size:
+                    // Row 1: Quick Utilities (Tracks, Subtitles, Speed option dial, Auto pause)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onSeekBackward) {
-                            Icon(Icons.Filled.FastRewind, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(24.dp))
+                        // Audio Tracks select quick icon
+                        IconButton(onClick = onShowTracks) {
+                            Icon(Icons.Filled.AudioFile, contentDescription = "Audio track", tint = Color.White)
                         }
+
+                        // Speeds dial layout (0.5x to 2x)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            listOf(0.5f, 1.0f, 1.5f, 2.0f).forEach { itemSpeed ->
+                                val isSelected = speed == itemSpeed
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSelected) skin.primary else Color.White.copy(alpha = 0.1f))
+                                        .clickable { onChangeSpeed(itemSpeed) }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        "${itemSpeed}x",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) skin.background else Color.White
+                                    )
+                                }
+                            }
+                        }
+
+                        // Subtitles download quick icon
+                        IconButton(onClick = onShowSubtitles) {
+                            Icon(Icons.Filled.Subtitles, contentDescription = "Subtitles", tint = Color.White)
+                        }
+
+                        // Auto Pause Toggle
+                        IconButton(onClick = { onChangeAutoPause(!autoPause) }) {
+                            Icon(
+                                imageVector = if (autoPause) Icons.Filled.Timer else Icons.Filled.TimerOff,
+                                contentDescription = "Auto Pause",
+                                tint = if (autoPause) skin.primary else Color.White
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Row 2: Large main centered playback triggers (Fast Rewind - Play/Pause - Fast Forward)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onSeekBackward,
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastRewind,
+                                contentDescription = "-10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(28.dp))
+
                         IconButton(
                             onClick = onChangePlayPause,
                             modifier = Modifier
+                                .size(64.dp)
                                 .background(skin.primary, CircleShape)
-                                .padding(8.dp)
                         ) {
                             Icon(
                                 imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                 contentDescription = "Play/pause",
                                 tint = skin.background,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(36.dp)
                             )
                         }
-                        IconButton(onClick = onSeekForward) {
-                            Icon(Icons.Filled.FastForward, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(24.dp))
+
+                        Spacer(modifier = Modifier.width(28.dp))
+
+                        IconButton(
+                            onClick = onSeekForward,
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FastForward,
+                                contentDescription = "+10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
                         }
-                    }
-
-                    // Subtitles download quick icon
-                    IconButton(onClick = onShowSubtitles) {
-                        Icon(Icons.Filled.Subtitles, contentDescription = "Subtitles", tint = Color.White)
-                    }
-
-                    // Auto Pause Toggle
-                    IconButton(onClick = { onChangeAutoPause(!autoPause) }) {
-                        Icon(
-                            imageVector = if (autoPause) Icons.Filled.Timer else Icons.Filled.TimerOff,
-                            contentDescription = "Auto Pause",
-                            tint = if (autoPause) skin.primary else Color.White
-                        )
                     }
                 }
             }
@@ -2779,40 +3959,382 @@ fun GHPConversionDialog(videoItem: LocalMediaItem?, progress: Float, skin: GHSki
 @Composable
 fun GHPDownloadSubtitleDialog(
     item: LocalMediaItem,
+    viewModel: MainViewModel,
     skin: GHSkin,
-    onDismiss: () -> Unit,
-    onConfirmDownload: () -> Unit
+    onDismiss: () -> Unit
 ) {
+    var queryText by remember { mutableStateOf(item.title) }
+    var forceNotFound by remember { mutableStateOf(false) }
+    var actionStatusString by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            Button(
-                onClick = onConfirmDownload,
-                colors = ButtonDefaults.buttonColors(containerColor = skin.primary, contentColor = skin.background)
-            ) {
-                Text("DOWNLOAD ONLINE")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, colors = ButtonDefaults.textButtonColors(contentColor = skin.onSurface)) {
-                Text("CANCEL")
-            }
-        },
+        confirmButton = {},
         title = {
-            Text("SUBTITLE DOWNLOADS", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Subtitles,
+                    contentDescription = null,
+                    tint = skin.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text("SUBTITLE CONTROL CENTER", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Download subtitles for: ${item.title}",
-                    fontSize = 13.sp,
-                    color = skin.onSurface.copy(alpha = 0.8f)
-                )
-                Text(
-                    text = "System searches and downloads official Ghanaian and global English linguistic subtitles directly to your local file path.",
-                    fontSize = 11.sp,
-                    color = skin.onSurface.copy(alpha = 0.6f)
-                )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Active Status info card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(skin.background)
+                        .padding(10.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "STATUS:",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 9.sp,
+                            color = skin.primary
+                        )
+                        Text(
+                            text = if (viewModel.activeSubtitleUrl != null) {
+                                "🟢 Active: ${viewModel.activeSubtitleUrl}"
+                            } else {
+                                "🔴 No active subtitle track"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = skin.onSurface
+                        )
+                        viewModel.activeSubtitleUrl?.let {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            TextButton(
+                                onClick = { viewModel.clearSubtitle() },
+                                colors = ButtonDefaults.textButtonColors(contentColor = skin.accentRed),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Filled.Clear, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("CLEAR SUBTITLE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // Query text field
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "SUBTITLE SOURCE SEARCH:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        color = skin.onSurface.copy(alpha = 0.6f)
+                    )
+                    OutlinedTextField(
+                        value = queryText,
+                        onValueChange = { queryText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = skin.primary,
+                            unfocusedBorderColor = skin.onSurface.copy(alpha = 0.2f),
+                            focusedContainerColor = skin.background,
+                            unfocusedContainerColor = skin.background
+                        ),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+
+                // Language select chips
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "LANGUAGE:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        color = skin.onSurface.copy(alpha = 0.6f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("English", "Akan (Twi)", "French").forEach { lang ->
+                            val isSelected = viewModel.subtitleLanguage == lang
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) skin.primary else skin.onSurface.copy(alpha = 0.05f))
+                                    .clickable { viewModel.subtitleLanguage = lang }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = lang,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) skin.background else skin.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Toggle simulate error
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { forceNotFound = !forceNotFound }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Simulate Subtitle Not Found", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = skin.onSurface)
+                        Text("Simulate network or server 404 failure.", fontSize = 9.sp, color = skin.onSurface.copy(alpha = 0.5f))
+                    }
+                    Switch(
+                        checked = forceNotFound,
+                        onCheckedChange = { forceNotFound = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = skin.primary,
+                            checkedTrackColor = skin.primary.copy(alpha = 0.3f),
+                            uncheckedThumbColor = skin.onSurface.copy(alpha = 0.3f),
+                            uncheckedTrackColor = skin.onSurface.copy(alpha = 0.1f)
+                        )
+                    )
+                }
+
+                // Status banner
+                actionStatusString?.let { status ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(skin.primary.copy(alpha = 0.1f))
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = status,
+                            color = skin.primary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                // Error Warning Card
+                viewModel.subtitleDownloadError?.let { err ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, skin.accentRed.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                            .background(skin.accentRed.copy(alpha = 0.05f))
+                            .padding(10.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Warning, contentDescription = null, tint = skin.accentRed, modifier = Modifier.size(16.dp))
+                                Text("SUBTITLE TRACK NOT FOUND", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = skin.accentRed)
+                            }
+                            Text(err, fontSize = 10.sp, color = skin.onSurface.copy(alpha = 0.8f))
+                            Text("💡 Try loading offline backup using 'LOAD OFFLINE MOCK' below.", fontSize = 9.sp, color = skin.onSurface.copy(alpha = 0.5f))
+                        }
+                    }
+                }
+
+                // Actions Button Row
+                if (viewModel.isDownloadingSubtitle) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        CircularProgressIndicator(color = skin.primary, modifier = Modifier.size(24.dp))
+                        Text("Querying OpenSubtitles db...", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = skin.primary)
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                viewModel.downloadSubtitleWithSearchAndLanguage(
+                                    item = item,
+                                    query = queryText,
+                                    lang = viewModel.subtitleLanguage,
+                                    forceNotFound = forceNotFound
+                                ) { success, msg ->
+                                    actionStatusString = msg
+                                    if (success) {
+                                        scope.launch {
+                                            delay(1500)
+                                            onDismiss()
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = skin.primary, contentColor = skin.background),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(vertical = 10.dp)
+                        ) {
+                            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SEARCH & DOWNLOAD ONLINE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.loadLocalMockFile(item)
+                                    actionStatusString = "Loaded offline local simulated subtitle!"
+                                    scope.launch {
+                                        delay(1200)
+                                        onDismiss()
+                                    }
+                                },
+                                modifier = Modifier.weight(1.3f),
+                                border = BorderStroke(1.dp, skin.primary.copy(alpha = 0.4f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = skin.primary),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("LOAD OFFLINE MOCK", fontSize = 10.sp)
+                            }
+
+                            Button(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(0.7f),
+                                colors = ButtonDefaults.buttonColors(containerColor = skin.onSurface.copy(alpha = 0.08f), contentColor = skin.onSurface),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("CLOSE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = skin.onSurface.copy(alpha = 0.1f))
+
+                // Typography & Offset sync preferences
+                Text("STYLE & SYNCHRONIZER OFFSETS", fontSize = 10.sp, fontWeight = FontWeight.Black, color = skin.primary)
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Offset Delay Adjust:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = skin.onSurface)
+                        Text("${viewModel.subtitleOffsetMs}ms ${if (viewModel.subtitleOffsetMs > 0) "delayed" else if (viewModel.subtitleOffsetMs < 0) "ahead" else "(synced)"}", fontSize = 10.sp, color = skin.primary, fontWeight = FontWeight.Bold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf(-500L, -100L, 0L, 100L, 500L).forEach { delta ->
+                            val txt = if (delta == 0L) "RESET" else if (delta > 0) "+${delta}" else "$delta"
+                            Button(
+                                onClick = { if (delta == 0L) viewModel.subtitleOffsetMs = 0L else viewModel.subtitleOffsetMs += delta },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (delta == 0L) skin.primary.copy(alpha = 0.15f) else skin.background,
+                                    contentColor = if (delta == 0L) skin.primary else skin.onSurface
+                                ),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(vertical = 4.dp, horizontal = 0.dp)
+                            ) {
+                                Text(txt, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // Font Size Settings slider
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Disp Font Sizing:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = skin.onSurface)
+                        Text("${viewModel.subtitleTextSize.toInt()} sp", fontSize = 10.sp, color = skin.primary, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = viewModel.subtitleTextSize,
+                        onValueChange = { viewModel.subtitleTextSize = it },
+                        valueRange = 10f..24f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = skin.accentGold,
+                            activeTrackColor = skin.primary,
+                            inactiveTrackColor = skin.onSurface.copy(alpha = 0.1f)
+                        ),
+                        modifier = Modifier.height(14.dp)
+                    )
+                }
+
+                // Typography selection
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Typography Tone Coloring:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = skin.onSurface)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "Yellow" to Color(0xFFF1C40F),
+                            "White" to Color.White,
+                            "Green" to Color(0xFF2ECC71)
+                        ).forEach { (name, color) ->
+                            val isSelected = viewModel.subtitleColor == name
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 1.dp,
+                                        color = if (isSelected) skin.primary else skin.onSurface.copy(alpha = 0.1f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .background(skin.background)
+                                    .clickable { viewModel.subtitleColor = name }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .background(color, CircleShape)
+                                        .clip(CircleShape)
+                                )
+                                Text(
+                                    text = name,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) skin.primary else skin.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         containerColor = skin.surface
@@ -3078,4 +4600,15 @@ fun GHPTimerBottomSheet(
             }
         }
     }
+}
+
+fun Context.findActivity(): Activity? {
+    var currentContext = this
+    while (currentContext is ContextWrapper) {
+        if (currentContext is Activity) {
+            return currentContext
+        }
+        currentContext = currentContext.baseContext
+    }
+    return null
 }

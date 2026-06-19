@@ -29,6 +29,9 @@ interface MediaDao {
     @Query("DELETE FROM media_history")
     suspend fun clearHistory()
 
+    @Query("UPDATE media_history SET isFavorite = 0")
+    suspend fun clearAllFavorites()
+
     // Playlist Operations
     @Query("SELECT * FROM playlists ORDER BY dateCreated DESC")
     fun getAllPlaylists(): Flow<List<Playlist>>

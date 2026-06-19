@@ -92,4 +92,8 @@ class MediaRepository(private val mediaDao: MediaDao) {
     suspend fun clearHistory() {
         mediaDao.clearHistory()
     }
+
+    suspend fun clearAllFavorites() {
+        mediaDao.clearAllFavorites()
+    }
 }

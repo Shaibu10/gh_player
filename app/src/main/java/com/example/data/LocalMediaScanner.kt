@@ -6,7 +6,7 @@ import android.util.Log
 
 class LocalMediaScanner(private val context: Context) {
 
-    fun scanVideos(): List<LocalMediaItem> {
+    fun scanVideos(includeDemoMedia: Boolean = false): List<LocalMediaItem> {
         val list = mutableListOf<LocalMediaItem>()
         val localList = mutableListOf<LocalMediaItem>()
 
@@ -68,7 +68,7 @@ class LocalMediaScanner(private val context: Context) {
 
         if (localList.isNotEmpty()) {
             list.addAll(localList)
-        } else {
+        } else if (includeDemoMedia) {
             // Add preloaded Ghana-themed streaming videos only as a fallback
             list.addAll(getPreloadedVideos())
         }
@@ -76,7 +76,7 @@ class LocalMediaScanner(private val context: Context) {
         return list
     }
 
-    fun scanAudios(): List<LocalMediaItem> {
+    fun scanAudios(includeDemoMedia: Boolean = false): List<LocalMediaItem> {
         val list = mutableListOf<LocalMediaItem>()
         val localList = mutableListOf<LocalMediaItem>()
 
@@ -140,7 +140,7 @@ class LocalMediaScanner(private val context: Context) {
 
         if (localList.isNotEmpty()) {
             list.addAll(localList)
-        } else {
+        } else if (includeDemoMedia) {
             // Add preloaded Ghana-themed streaming audios only as a fallback
             list.addAll(getPreloadedAudios())
         }
