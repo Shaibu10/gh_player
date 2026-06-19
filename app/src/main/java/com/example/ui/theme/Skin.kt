@@ -60,5 +60,50 @@ val SkinsList = listOf(
         surface = Color(0xFF121212), // Dark Gray
         onBackground = Color(0xFFFFFFFF),
         onSurface = Color(0xFFE0E0E0)
+    ),
+    GHSkin(
+        name = "NDC Green",
+        primary = Color(0xFF008000),                
+        secondary = Color(0xFFFF0000),              
+        background = Color(0xFF101010),
+        surface = Color(0xFF202020),
+        onBackground = Color(0xFFFFFFFF),
+        onSurface = Color(0xFFCCCCCC)
+    ),
+    GHSkin(
+        name = "NPP Red",
+        primary = Color(0xFFFF0000),
+        secondary = Color(0xFF0000FF),
+        background = Color(0xFF101010),
+        surface = Color(0xFF202020),
+        onBackground = Color(0xFFFFFFFF),
+        onSurface = Color(0xFFCCCCCC)
+    ),
+    GHSkin(
+        name = "CPP Red",
+        primary = Color(0xFFFF0000),
+        secondary = Color(0xFF008000),
+        background = Color(0xFFF0F0F0),
+        surface = Color(0xFFE0E0E0),
+        onBackground = Color(0xFF000000),
+        onSurface = Color(0xFF333333)
+    ),
+    GHSkin(
+        name = "Kotoko Red",
+        primary = Color(0xFFD32F2F),
+        secondary = Color(0xFF388E3C),
+        background = Color(0xFF1B1B1B),
+        surface = Color(0xFF2C2C2C),
+        onBackground = Color(0xFFFFFFFF),
+        onSurface = Color(0xFFDDDDDD)
+    ),
+    GHSkin(
+        name = "Hearts Rainbow",
+        primary = Color(0xFFD32F2F),
+        secondary = Color(0xFF1976D2),
+        background = Color(0xFF1B1B1B),
+        surface = Color(0xFF2C2C2C),
+        onBackground = Color(0xFFFFFFFF),
+        onSurface = Color(0xFFDDDDDD)
     )
 )

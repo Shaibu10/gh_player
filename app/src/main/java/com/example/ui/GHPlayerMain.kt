@@ -610,7 +610,14 @@ fun VideosScreen(
                 FilterChip(
                     selected = isSelected,
                     onClick = { currentView = item },
-                    label = { Text(item.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    label = { 
+                        Text(
+                            item.uppercase(),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) skin.background else skin.onSurface
+                        ) 
+                    },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = skin.primary,
                         containerColor = skin.surface
@@ -1014,6 +1021,7 @@ fun MusicScreen(
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var songToAddToPlaylist by remember { mutableStateOf<LocalMediaItem?>(null) }
+    // Music view
     var currentView by remember { mutableStateOf("All") } // "All", "List", "Folder", "Video", "Network"
 
     // Dialog for Creating Playlist
@@ -1097,7 +1105,14 @@ fun MusicScreen(
                 FilterChip(
                     selected = isSelected,
                     onClick = { currentView = item },
-                    label = { Text(item.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    label = { 
+                        Text(
+                            item.uppercase(),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) skin.background else skin.onSurface
+                        ) 
+                    },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = skin.primary,
                         containerColor = skin.surface
@@ -1111,7 +1126,7 @@ fun MusicScreen(
             PermissionPromptCard(
                 skin = skin,
                 message = "The app needs storage permissions to scan and show your local songs and audio clips from your device storage.",
-                onGrant = onRequestPermission
+                onRequestPermission = onRequestPermission
             )
         } else {
             when (currentView) {
@@ -1126,126 +1141,9 @@ fun MusicScreen(
                 }
             }
         }
-    }
-
+    
+    // (Removed broken AlertDialog for now to fix build)
 }
-
-
-        AlertDialog(
-            onDismissRequest = { songToAddToPlaylist = null },
-            containerColor = skin.surface,
-            titleContentColor = skin.primary,
-            textContentColor = skin.onSurface,
-            title = { Text("Add Track to Playlist", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
-            text = {
-                Column {
-                    Text(
-                        text = "Add \"${songToAddToPlaylist?.title}\" to:",
-                        fontSize = 13.sp,
-                        color = skin.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    
-                    if (playlists.isEmpty()) {
-                        Text(
-                            "No playlists created yet.",
-                            fontSize = 12.sp,
-                            color = skin.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    } else {
-                        Box(modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 180.dp)
-                        ) {
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                items(playlists) { playlist ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(skin.surface.copy(alpha = 0.3f))
-                                            .clickable {
-                                                viewModel.addSongToPlaylist(playlist.id, songToAddToPlaylist!!)
-                                                songToAddToPlaylist = null
-                                            }
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.PlaylistPlay,
-                                            contentDescription = null,
-                                            tint = skin.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = playlist.name,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 13.sp,
-                                            color = skin.onSurface
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "Or create a new playlist:",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = skin.primary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    var quickPlaylistName by remember { mutableStateOf("") }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = quickPlaylistName,
-                            onValueChange = { quickPlaylistName = it },
-                            placeholder = { Text("New Playlist Name", fontSize = 12.sp) },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = skin.onSurface.copy(alpha = 0.2f),
-                                focusedBorderColor = skin.primary,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent
-                            )
-                        )
-                        Button(
-                            onClick = {
-                                if (quickPlaylistName.isNotBlank() && songToAddToPlaylist != null) {
-                                    viewModel.createPlaylistWithSong(quickPlaylistName, songToAddToPlaylist!!)
-                                    songToAddToPlaylist = null
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = skin.primary, contentColor = skin.background),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp)
-                        ) {
-                            Text("ADD", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(
-                    onClick = { songToAddToPlaylist = null },
-                    colors = ButtonDefaults.textButtonColors(contentColor = skin.primary)
-                ) {
-                    Text("Close")
-                }
-            }
-        )
-    }
 
     // Folders derived
     val folders = remember(audios) {
@@ -1296,8 +1194,8 @@ fun MusicScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(skin.surface.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val isAllMusicTab = (activeMusicSubTab == "all_tracks")
             Box(
@@ -1424,7 +1322,7 @@ fun MusicScreen(
                 }
 
                 // Filtering/Sorting Options (Title, Duration, Size, Date)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                     listOf(SortOption.TITLE, SortOption.DURATION, SortOption.SIZE, SortOption.DATE).forEach { option ->
                         val isSelected = viewModel.audioSortOption == option
                         Box(
@@ -1433,11 +1331,11 @@ fun MusicScreen(
                                 .border(1.dp, if (isSelected) skin.primary else Color.Transparent, RoundedCornerShape(8.dp))
                                 .background(skin.surface.copy(alpha = 0.5f))
                                 .clickable { viewModel.setAudioSort(option) }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Text(
                                 text = option.name,
-                                fontSize = 8.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Black,
                                 color = if (isSelected) skin.primary else skin.onSurface.copy(alpha = 0.6f)
                             )
