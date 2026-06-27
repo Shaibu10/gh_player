@@ -694,6 +694,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteFile(item: LocalMediaItem): Boolean {
+        val file = File(item.path)
+        return if (file.exists()) {
+            file.delete()
+        } else {
+            false
+        }
+    }
+
+    fun moveFile(item: LocalMediaItem, newPath: String): Boolean {
+        val file = File(item.path)
+        val newFile = File(newPath)
+        return if (file.exists()) {
+            file.renameTo(newFile)
+        } else {
+            false
+        }
+    }
+
+    fun copyFile(item: LocalMediaItem, newPath: String): Boolean {
+        val file = File(item.path)
+        val newFile = File(newPath)
+        return if (file.exists()) {
+            try {
+                file.copyTo(newFile, overwrite = true)
+                true
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error copying file", e)
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     fun removeFromHistory(id: Int) {
         viewModelScope.launch {
             mediaRepository.deleteHistory(id)

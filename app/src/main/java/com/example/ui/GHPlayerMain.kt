@@ -3,6 +3,7 @@ package com.example.ui
 import android.widget.MediaController
 import android.widget.VideoView
 import android.net.Uri
+import android.content.Intent
 import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -1024,6 +1025,28 @@ fun MusicScreen(
     // Music view
     var currentView by remember { mutableStateOf("All") } // "All", "List", "Folder", "Video", "Network"
 
+    // Folders derived
+    val folders = remember(audios) {
+        listOf("All") + audios.map { it.folder }.distinct()
+    }
+
+    // Filtered and Sorted
+    val filteredAudios = remember(audios, viewModel.selectedAudioFolder, viewModel.audioSortOption, viewModel.audioSearchQuery) {
+        var result = audios.filter { audio ->
+            val matchFolder = viewModel.selectedAudioFolder == "All" || audio.folder == viewModel.selectedAudioFolder
+            val matchQuery = viewModel.audioSearchQuery.isEmpty() || audio.title.contains(viewModel.audioSearchQuery, ignoreCase = true)
+            matchFolder && matchQuery
+        }
+        
+        result = when (viewModel.audioSortOption) {
+            SortOption.TITLE -> result.sortedBy { it.title }
+            SortOption.DURATION -> result.sortedByDescending { it.duration }
+            SortOption.SIZE -> result.sortedByDescending { it.size }
+            SortOption.DATE -> result.sortedByDescending { it.dateAdded }
+        }
+        result
+    }
+
     // Dialog for Creating Playlist
     if (showCreatePlaylistDialog) {
         AlertDialog(
@@ -1094,148 +1117,88 @@ fun MusicScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Navigation Bar (All, List, Folder, Video, Network)
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // Navigation and Filter Bars
+        Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            val navItems = listOf("All", "List", "Folder", "Video", "Network")
-            navItems.forEach { item ->
-                val isSelected = currentView == item
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { currentView = item },
-                    label = { 
+            // Navigation Bar (All, List, Folder, Video, Network)
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val navItems = listOf("All", "List", "Folder", "Video", "Network")
+                navItems.forEach { item ->
+                    val isSelected = currentView == item
+                    Surface(
+                        onClick = { currentView = item },
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isSelected) skin.primary else skin.surface.copy(alpha = 0.5f),
+                        modifier = Modifier.height(38.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        ) {
+                            Text(
+                                text = item.uppercase(),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isSelected) skin.background else skin.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Premium Capsule music subtab switcher
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(skin.surface.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                    .padding(8.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                val isAllMusicTab = (activeMusicSubTab == "all_tracks")
+                Surface(
+                    onClick = { activeMusicSubTab = "all_tracks"; selectedPlaylistView = null },
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isAllMusicTab) skin.primary else skin.surface.copy(alpha = 0.5f),
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    ) {
                         Text(
-                            item.uppercase(),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isSelected) skin.background else skin.onSurface
-                        ) 
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = skin.primary,
-                        containerColor = skin.surface
-                    )
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        if (!permissionsGranted) {
-            PermissionPromptCard(
-                skin = skin,
-                message = "The app needs storage permissions to scan and show your local songs and audio clips from your device storage.",
-                onRequestPermission = onRequestPermission
-            )
-        } else {
-            when (currentView) {
-                "All" -> {
-                    // Logic for "All" view
-                }
-                "Folder" -> {
-                    Text("Folder browsing coming soon!", color = skin.onSurface)
-                }
-                else -> {
-                    Text("View $currentView not yet implemented.", color = skin.onSurface)
-                }
-            }
-        }
-    
-    // (Removed broken AlertDialog for now to fix build)
-}
-
-    // Folders derived
-    val folders = remember(audios) {
-        listOf("All") + audios.map { it.folder }.distinct()
-    }
-
-    // Filtered and Sorted
-    val filteredAudios = remember(audios, viewModel.selectedAudioFolder, viewModel.audioSortOption, viewModel.audioSearchQuery) {
-        var result = audios.filter { audio ->
-            val matchFolder = viewModel.selectedAudioFolder == "All" || audio.folder == viewModel.selectedAudioFolder
-            val matchQuery = viewModel.audioSearchQuery.isEmpty() || audio.title.contains(viewModel.audioSearchQuery, ignoreCase = true)
-            matchFolder && matchQuery
-        }
-        
-        result = when (viewModel.audioSortOption) {
-            SortOption.TITLE -> result.sortedBy { it.title }
-            SortOption.DURATION -> result.sortedByDescending { it.duration }
-            SortOption.SIZE -> result.sortedByDescending { it.size }
-            SortOption.DATE -> result.sortedByDescending { it.dateAdded }
-        }
-        result
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        HeaderGhanaBranding(
-            title = "GH MUSIC PLAYER",
-            skin = skin,
-            onRefreshClick = { viewModel.refreshLibrary() }
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (!permissionsGranted) {
-            PermissionPromptCard(
-                skin = skin,
-                message = "The app needs storage permissions to scan and show your local songs and audio clips from your device storage.",
-                onRequestPermission = onRequestPermission
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        // Premium Capsule music subtab switcher
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(skin.surface.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            val isAllMusicTab = (activeMusicSubTab == "all_tracks")
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isAllMusicTab) skin.primary else Color.Transparent)
-                    .clickable { 
-                        activeMusicSubTab = "all_tracks"
-                        selectedPlaylistView = null
+                            text = "ALL MUSIC & CLIPS",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isAllMusicTab) skin.background else skin.onSurface
+                        )
                     }
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "ALL MUSIC & CLIPS",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isAllMusicTab) skin.background else skin.onSurface.copy(alpha = 0.7f)
-                )
-            }
+                }
 
-            val isPlaylistsTab = (activeMusicSubTab == "playlists")
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isPlaylistsTab) skin.primary else Color.Transparent)
-                    .clickable { 
-                        activeMusicSubTab = "playlists"
+                val isPlaylistsTab = (activeMusicSubTab == "playlists")
+                Surface(
+                    onClick = { activeMusicSubTab = "playlists" },
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isPlaylistsTab) skin.primary else skin.surface.copy(alpha = 0.5f),
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    ) {
+                        Text(
+                            text = "MY PLAYLISTS (${playlists.size})",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isPlaylistsTab) skin.background else skin.onSurface
+                        )
                     }
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "MY PLAYLISTS (${playlists.size})",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isPlaylistsTab) skin.background else skin.onSurface.copy(alpha = 0.7f)
-                )
+                }
             }
         }
 
@@ -1367,6 +1330,7 @@ fun MusicScreen(
                     items(filteredAudios) { audio ->
                         val isActive = viewModel.activeAudioItem?.id == audio.id
                         val isFav = favoritesList.any { it.path == audio.path }
+                        val context = LocalContext.current
                         AudioFileRow(
                             audio = audio,
                             isActive = isActive,
@@ -1374,7 +1338,18 @@ fun MusicScreen(
                             isFavorite = isFav,
                             onClick = { viewModel.playAudio(audio) },
                             onToggleFavorite = { viewModel.toggleFavorite(audio.path) },
-                            onAddToPlaylist = { songToAddToPlaylist = audio }
+                            onAddToPlaylist = { songToAddToPlaylist = audio },
+                            onDelete = { viewModel.deleteFile(audio) },
+                            onCopy = { /* TODO: Implement copy dialog */ },
+                            onMove = { /* TODO: Implement move dialog */ },
+                            onShare = {
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "audio/*"
+                                    putExtra(Intent.EXTRA_STREAM, Uri.parse("file://" + audio.path))
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Share Audio"))
+                            }
                         )
                     }
                 }
@@ -1672,7 +1647,11 @@ fun AudioFileRow(
     isFavorite: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onAddToPlaylist: () -> Unit
+    onAddToPlaylist: () -> Unit,
+    onDelete: () -> Unit,
+    onCopy: () -> Unit,
+    onMove: () -> Unit,
+    onShare: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -1740,31 +1719,43 @@ fun AudioFileRow(
             }
         }
 
-        // Actions
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onAddToPlaylist) {
-                Icon(
-                    Icons.Filled.PlaylistAdd,
-                    contentDescription = "Add to playlist",
-                    tint = skin.primary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    tint = if (isFavorite) skin.accentRed else skin.onSurface.copy(alpha = 0.6f),
-                    modifier = Modifier.size(16.dp)
-                )
-            }
+    // Actions
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = skin.onSurface)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("Copy") }, onClick = { onCopy(); expanded = false })
+            DropdownMenuItem(text = { Text("Move") }, onClick = { onMove(); expanded = false })
+            DropdownMenuItem(text = { Text("Delete") }, onClick = { onDelete(); expanded = false })
+            DropdownMenuItem(text = { Text("Share") }, onClick = { onShare(); expanded = false })
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onAddToPlaylist) {
             Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = skin.onSurface.copy(alpha = 0.3f),
+                Icons.Filled.PlaylistAdd,
+                contentDescription = "Add to playlist",
+                tint = skin.primary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        IconButton(onClick = onToggleFavorite) {
+            Icon(
+                imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                contentDescription = "Favorite",
+                tint = if (isFavorite) skin.accentRed else skin.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.size(16.dp)
             )
         }
+        Icon(
+            Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = skin.onSurface.copy(alpha = 0.3f),
+            modifier = Modifier.size(16.dp)
+        )
+    }
     }
 }
 
